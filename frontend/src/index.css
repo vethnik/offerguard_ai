@@ -1,0 +1,8 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Smooth base styling */
+body {
+  background-color: #020617; /* slate-950 */
+}
