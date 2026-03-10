@@ -1,15 +1,11 @@
 # ─────────────────────────────────────────
-# OfferGuard - Dockerfile
+# OfferGuard - Dockerfile (Hugging Face)
 # ─────────────────────────────────────────
 
-# Use official Python 3.11 slim image
 FROM python:3.11-slim
 
-# Set working directory
-WORKDIR /app
-
 # ─────────────────────────────────────────
-# Install system dependencies
+# Install system dependencies (as root)
 # Tesseract → OCR
 # Poppler  → pdf2image
 # ─────────────────────────────────────────
@@ -21,24 +17,35 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # ─────────────────────────────────────────
+# Required by Hugging Face Spaces
+# ─────────────────────────────────────────
+RUN useradd -m -u 1000 user
+USER user
+ENV HOME=/home/user \
+    PATH=/home/user/.local/bin:$PATH
+
+# Set working directory
+WORKDIR /home/user/app
+
+# ─────────────────────────────────────────
 # Install Python dependencies
 # ─────────────────────────────────────────
-COPY backend/requirements.txt .
+COPY --chown=user backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # ─────────────────────────────────────────
 # Copy backend code
 # ─────────────────────────────────────────
-COPY backend/ .
+COPY --chown=user backend/ .
 
 # ─────────────────────────────────────────
-# Set Tesseract path (installed via apt)
+# Set Tesseract path
 # ─────────────────────────────────────────
 ENV TESSERACT_PATH=/usr/bin/tesseract
 
 # ─────────────────────────────────────────
-# Expose port and start server
+# Hugging Face uses port 7860
 # ─────────────────────────────────────────
-EXPOSE 8000
+EXPOSE 7860
 
-CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860"]
