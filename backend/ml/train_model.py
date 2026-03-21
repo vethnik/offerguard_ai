@@ -2,7 +2,7 @@ import pandas as pd
 import joblib
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 
 # Load dataset
@@ -19,7 +19,7 @@ X_train, X_test, y_train, y_test = train_test_split(
 # TF-IDF with n-grams
 vectorizer = TfidfVectorizer(
     max_features=5000,
-    ngram_range=(1, 2),  # unigrams + bigrams
+    ngram_range=(1, 2),
     stop_words="english"
 )
 
@@ -34,13 +34,15 @@ model.fit(X_train_vec, y_train)
 y_pred = model.predict(X_test_vec)
 
 # Evaluation
-accuracy = accuracy_score(y_test, y_pred)
-
-print("\nModel Accuracy:", accuracy)
-print("\nClassification Report:\n")
+print("\nModel Accuracy:", accuracy_score(y_test, y_pred))
+print("\nClassification Report:")
 print(classification_report(y_test, y_pred))
-print("\nConfusion Matrix:\n")
+print("\nConfusion Matrix:")
 print(confusion_matrix(y_test, y_pred))
+
+# Cross Validation (real performance)
+cv_scores = cross_val_score(model, X_train_vec, y_train, cv=5, scoring='accuracy')
+print(f"\nCross Validation Accuracy: {cv_scores.mean()*100:.2f}% (+/- {cv_scores.std()*100:.2f}%)")
 
 # Save model
 joblib.dump(model, "fraud_model.pkl")

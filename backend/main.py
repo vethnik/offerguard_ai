@@ -139,70 +139,125 @@ async def analyze_offer(file: UploadFile = File(...)):
     financial_score = 0
     email_score = 0
     structure_score = 0
-
     reasons = []
 
-    # Urgency patterns
+    # ── Urgency patterns ──
     urgency_keywords = [
-        "immediately",
-        "urgent",
-        "within 24 hours",
-        "act fast",
-        "limited time",
+        "immediately", "urgent", "within 24 hours", "act fast",
+        "limited time", "respond immediately", "confirm immediately",
+        "reply immediately", "limited slots", "slot confirmation",
+        "hurry", "act now", "time sensitive", "expires within",
+        "offer expires", "seats are filling", "do not delay",
+        "respond urgently", "within 48 hours", "last date", "deadline",
     ]
-
     for word in urgency_keywords:
         if word in text_lower:
             urgency_score += 10
-            reasons.append(f"Urgency pattern detected: {word}")
+            reasons.append(f"Urgency pattern detected: '{word}'")
 
-    # Financial red flags
+    # ── Financial red flags ──
     financial_keywords = [
-        "processing fee",
-        "registration fee",
-        "non-refundable",
-        "payment required",
-        "bank transfer",
-        "upi",
+        "processing fee", "registration fee", "training fee",
+        "documentation fee", "verification fee", "courier charges",
+        "uniform fee", "id card fee", "onboarding fee",
+        "security deposit", "caution deposit", "security amount",
+        "refundable deposit", "welcome kit amount", "kit amount",
+        "joining deposit", "advance deposit",
+        "pay via upi", "send via upi", "transfer via upi",
+        "neft transfer", "bank transfer", "send money",
+        "transfer amount", "deposit amount", "pay now",
+        "non-refundable", "payment required", "fee required",
+        "amount required", "pay before joining", "pay to confirm",
+        "payment confirmation", "send payment", "submit payment",
     ]
-
     for word in financial_keywords:
         if word in text_lower:
             financial_score += 20
-            reasons.append(f"Financial red flag detected: {word}")
+            reasons.append(f"Financial red flag detected: '{word}'")
 
-    # Email intelligence
-    emails = set(
-        re.findall(
-            r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+",
-            text,
-        )
-    )
+    # ── Payment + refund promise combo ──
+    payment_words = ["deposit", "fee", "amount", "pay", "transfer", "send"]
+    refund_words  = ["refundable", "refund", "return", "reimburse", "adjustable"]
+    has_payment = any(w in text_lower for w in payment_words)
+    has_refund  = any(w in text_lower for w in refund_words)
+    if has_payment and has_refund:
+        financial_score += 30
+        reasons.append("Payment with refund promise detected (classic scam pattern)")
 
+    # ── Email intelligence ──
+    emails = set(re.findall(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+", text))
     for email in emails:
         domain = email.split("@")[1].lower()
-
-        if domain in ["gmail.com", "yahoo.com", "outlook.com", "hotmail.com"]:
-            email_score += 30
-            reasons.append(f"Free email domain detected: {domain}")
-
-        if "-" in domain or any(char.isdigit() for char in domain):
+        if domain in ["gmail.com", "yahoo.com", "outlook.com", "hotmail.com",
+                      "yahoo.in", "rediffmail.com", "ymail.com"]:
+            email_score += 35
+            reasons.append(f"Free email domain used: {domain}")
+        if "-" in domain or any(char.isdigit() for char in domain.split(".")[0]):
             email_score += 15
-            reasons.append(f"Suspicious domain pattern detected: {domain}")
+            reasons.append(f"Suspicious domain pattern: {domain}")
 
-    # Structural authenticity
-    if "address" not in text_lower:
+    # ── Structural authenticity ──
+    if "address" not in text_lower and "office" not in text_lower:
         structure_score += 10
         reasons.append("No company address found")
-
-    if "www." not in text_lower and ".com" not in text_lower:
+    if "www." not in text_lower and ".com" not in text_lower and ".in" not in text_lower:
         structure_score += 10
         reasons.append("No official website detected")
-
     if not re.search(r"\+?\d{10,}", text):
         structure_score += 10
         reasons.append("No valid phone number detected")
 
+    # ── Unsolicited offer signal ──
+    unsolicited_phrases = [
+        "found your profile", "found in our database",
+        "shortlisted from database", "profile found online",
+        "you did not apply", "we found your cv",
+        "your cv was found", "selected from database",
+    ]
+    for phrase in unsolicited_phrases:
+        if phrase in text_lower:
+            structure_score += 25
+            reasons.append(f"Unsolicited offer signal: '{phrase}'")
+
+    # ── WhatsApp only contact ──
+    if "whatsapp" in text_lower and not re.search(r"\+?\d{10,}", text):
+        structure_score += 20
+        reasons.append("WhatsApp-only contact — no official phone number")
+
+    # ── Org name mismatch ──
+    org_pairs = [
+        ("air india", "airports authority"),
+        ("indian railway", "irctc"),
+        ("sbi", "state bank of india"),
+    ]
+    for org1, org2 in org_pairs:
+        if org1 in text_lower and org2 in text_lower:
+            structure_score += 25
+            reasons.append("Organization name mismatch detected")
+
+    # ── Fake government job ──
+    govt_scam_phrases = [
+        "government of india recruitment",
+        "central government job",
+        "psu recruitment",
+        "government vacancy",
+        "sarkari naukri",
+    ]
+    for phrase in govt_scam_phrases:
+        if phrase in text_lower:
+            structure_score += 20
+            reasons.append(f"Fake government job pattern: '{phrase}'")
+
+    # ── Lottery job scam ──
+    lottery_phrases = [
+        "you have won", "lucky candidate", "lucky winner",
+        "congratulations you are selected", "randomly selected",
+        "you did not apply but", "selected without interview",
+    ]
+    for phrase in lottery_phrases:
+        if phrase in text_lower:
+            structure_score += 30
+            reasons.append(f"Lottery job scam pattern: '{phrase}'")
     # ---------------------------------------------------
     # Final scoring
     # ---------------------------------------------------
@@ -219,7 +274,6 @@ async def analyze_offer(file: UploadFile = File(...)):
 
     fraud_score = min(combined_score, 100)
 
-    # Risk level
     if fraud_score <= 30:
         risk_level = "LOW RISK"
     elif fraud_score <= 60:

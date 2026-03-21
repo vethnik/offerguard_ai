@@ -241,6 +241,15 @@ const verd = (c) =>
       ? "Suspicious signals detected — verify the company before proceeding."
       : "Low risk — this offer appears legitimate. Always verify independently.";
 
+// ── Confidence level based on number of signals found ──
+const confidence = (signals) => {
+  if (signals >= 5)
+    return { label: "Very High Confidence", color: "var(--red)" };
+  if (signals >= 3) return { label: "High Confidence", color: "var(--amber)" };
+  if (signals >= 2) return { label: "Medium Confidence", color: "var(--cyan)" };
+  return { label: "Low Confidence", color: "var(--muted)" };
+};
+
 export default function App() {
   const [tab, setTab] = useState("pdf");
   const [file, setFile] = useState(null);
@@ -250,6 +259,13 @@ export default function App() {
   const [error, setError] = useState(null);
   const [drag, setDrag] = useState(false);
   const [ready, setReady] = useState(false);
+  const [history, setHistory] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem("og_history") || "[]");
+    } catch {
+      return [];
+    }
+  });
   const inputRef = useRef();
 
   const animScore = useCounter(result?.fraud_score ?? 0, 1400, ready);
@@ -300,8 +316,23 @@ export default function App() {
         });
       }
       const data = await res.json();
-      if (data.error) setError(data.error);
-      else setResult(data);
+      if (data.error) {
+        setError(data.error);
+      } else {
+        setResult(data);
+        const newEntry = {
+          id: Date.now(),
+          filename: data.filename,
+          score: data.fraud_score,
+          risk: data.risk_level,
+          time: new Date().toLocaleString(),
+        };
+        setHistory((prev) => {
+          const updated = [newEntry, ...prev].slice(0, 10);
+          localStorage.setItem("og_history", JSON.stringify(updated));
+          return updated;
+        });
+      }
     } catch {
       setError("Could not reach the server. Please try again.");
     } finally {
@@ -414,7 +445,6 @@ export default function App() {
         {/* UPLOAD */}
         {!result && (
           <div className="upload-card" style={{ padding: "8px" }}>
-            {/* TABS */}
             <div className="tabs" style={{ marginBottom: "8px" }}>
               <button
                 className={`tab ${tab === "pdf" ? "active" : ""}`}
@@ -430,7 +460,6 @@ export default function App() {
               </button>
             </div>
 
-            {/* PDF TAB */}
             {tab === "pdf" && (
               <div
                 className={`drop-zone ${file ? "ready" : ""} ${drag ? "drag" : ""}`}
@@ -486,7 +515,6 @@ export default function App() {
               </div>
             )}
 
-            {/* TEXT TAB */}
             {tab === "text" && (
               <div style={{ padding: "8px" }}>
                 <textarea
@@ -531,14 +559,43 @@ export default function App() {
               <div className="t-top">
                 <div>
                   <div className="t-eyebrow">Fraud Analysis Report</div>
-                  <div className={`rbadge ${riskClass}`}>
-                    <div className="rbadge-dot" />
-                    {result.risk_level}
+
+                  {/* RISK BADGE + CONFIDENCE BADGE */}
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "10px",
+                      flexWrap: "wrap",
+                      marginBottom: "8px",
+                    }}
+                  >
+                    <div className={`rbadge ${riskClass}`}>
+                      <div className="rbadge-dot" />
+                      {result.risk_level}
+                    </div>
+                    <div
+                      style={{
+                        fontFamily: "var(--mono)",
+                        fontSize: "11px",
+                        fontWeight: "700",
+                        color: confidence(result.reasons?.length ?? 0).color,
+                        background: "rgba(255,255,255,0.04)",
+                        border: `1px solid ${confidence(result.reasons?.length ?? 0).color}`,
+                        padding: "5px 12px",
+                        borderRadius: "100px",
+                        opacity: "0.85",
+                      }}
+                    >
+                      ⚡ {confidence(result.reasons?.length ?? 0).label}
+                    </div>
                   </div>
+
                   <div className="t-file">📎 {result.filename}</div>
                 </div>
                 <div className={`t-icon ${riskClass}`}>{icon(riskClass)}</div>
               </div>
+
               <div className="score-row">
                 <div className={`big-num ${riskClass}`}>{animScore}</div>
                 <div className="score-denom">/100</div>
@@ -669,6 +726,37 @@ export default function App() {
             </button>
           </div>
         )}
+        {/* SCAN HISTORY */}
+{history.length > 0 && !result && (
+  <div className="icard" style={{marginBottom:"32px"}}>
+    <div className="icard-title">
+      <div className="icard-dot"/>
+      Recent Scans
+      <span
+        onClick={()=>{ setHistory([]); localStorage.removeItem("og_history"); }}
+        style={{marginLeft:"auto",fontSize:"10px",color:"var(--muted)",cursor:"pointer",fontWeight:"400"}}
+      >
+        Clear
+      </span>
+    </div>
+    {history.map((h)=>(
+      <div key={h.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 0",borderBottom:"1px solid var(--border)"}}>
+        <div>
+          <div style={{fontSize:"13px",color:"var(--text)",fontFamily:"var(--mono)"}}>{h.filename}</div>
+          <div style={{fontSize:"11px",color:"var(--muted)",marginTop:"3px"}}>{h.time}</div>
+        </div>
+        <div style={{
+          fontFamily:"var(--mono)", fontSize:"11px", fontWeight:"700",
+          color: h.score>=61?"var(--red)":h.score>=31?"var(--amber)":"var(--green)",
+          textAlign:"right"
+        }}>
+          <div>{h.score}/100</div>
+          <div style={{fontSize:"10px",opacity:0.7}}>{h.risk}</div>
+        </div>
+      </div>
+    ))}
+  </div>
+)}
 
         <div className="footer">
           <div className="footer-line" />
