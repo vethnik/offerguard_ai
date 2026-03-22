@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File,Body
+from fastapi import FastAPI, UploadFile, File, Body
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,7 +17,6 @@ from pdf2image import convert_from_bytes
 
 app = FastAPI()
 
-# Allow all origins (since frontend + backend same server)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -54,87 +53,12 @@ VECTORIZER_PATH = os.path.join("ml", "vectorizer.pkl")
 ml_model = joblib.load(MODEL_PATH)
 vectorizer = joblib.load(VECTORIZER_PATH)
 
-# ---------------------------------------------------
-# Suspicious keywords
-# ---------------------------------------------------
-
-SUSPICIOUS_WORDS = [
-    "processing fee",
-    "registration fee",
-    "urgent payment",
-    "non-refundable",
-    "limited slots",
-    "immediately",
-    "pay",
-]
 
 # ---------------------------------------------------
-# API endpoint
+# Shared rule engine function
 # ---------------------------------------------------
 
-@app.post("/analyze/")
-async def analyze_offer(file: UploadFile = File(...)):
-
-    content = await file.read()
-
-    try:
-        pdf = fitz.open(stream=content, filetype="pdf")
-    except Exception:
-        return {"error": "Invalid or corrupted PDF file"}
-
-    text = ""
-
-    # Extract normal text
-    for page in pdf:
-        text += page.get_text()
-
-    pdf.close()
-
-    # OCR fallback
-    if not text.strip():
-        images = convert_from_bytes(content)
-        for image in images:
-            text += pytesseract.image_to_string(image)
-
-    if not text.strip():
-        return {"error": "No readable text found in PDF"}
-
-    text_lower = text.lower()
-
-    # ---------------------------------------------------
-    # ML Prediction
-    # ---------------------------------------------------
-
-    text_vector = vectorizer.transform([text])
-    ml_probability = ml_model.predict_proba(text_vector)[0][1]
-    ml_score = int(ml_probability * 100)
-
-    # ---------------------------------------------------
-    # Explainable AI
-    # ---------------------------------------------------
-
-    feature_names = vectorizer.get_feature_names_out()
-    coefficients = ml_model.coef_[0]
-
-    top_indices = coefficients.argsort()[-10:][::-1]
-
-    top_suspicious_words = []
-
-    top_suspicious_words = []
-
-    for idx in top_indices:
-        word = feature_names[idx]
-        weight = coefficients[idx]
-
-        if weight > 0 and word in text_lower:
-            top_suspicious_words.append(word)
-
-    top_suspicious_words = top_suspicious_words[:5]
-
-    # ---------------------------------------------------
-    # Rule-based analysis
-    # ---------------------------------------------------
-
+def run_rule_engine(text, text_lower):
     urgency_score = 0
     financial_score = 0
     email_score = 0
@@ -177,9 +101,9 @@ async def analyze_offer(file: UploadFile = File(...)):
 
     # ── Payment + refund promise combo ──
     payment_words = ["deposit", "fee", "amount", "pay", "transfer", "send"]
-    refund_words  = ["refundable", "refund", "return", "reimburse", "adjustable"]
+    refund_words = ["refundable", "refund", "return", "reimburse", "adjustable"]
     has_payment = any(w in text_lower for w in payment_words)
-    has_refund  = any(w in text_lower for w in refund_words)
+    has_refund = any(w in text_lower for w in refund_words)
     if has_payment and has_refund:
         financial_score += 30
         reasons.append("Payment with refund promise detected (classic scam pattern)")
@@ -258,13 +182,17 @@ async def analyze_offer(file: UploadFile = File(...)):
         if phrase in text_lower:
             structure_score += 30
             reasons.append(f"Lottery job scam pattern: '{phrase}'")
-    # ---------------------------------------------------
-    # Final scoring
-    # ---------------------------------------------------
 
+    return urgency_score, financial_score, email_score, structure_score, reasons
+
+
+# ---------------------------------------------------
+# Shared scoring function
+# ---------------------------------------------------
+
+def calculate_final_score(ml_score, urgency_score, financial_score, email_score, structure_score):
     rule_score = urgency_score + financial_score + email_score + structure_score
 
-    # Dynamic weighting
     if ml_score >= 70:
         combined_score = int((rule_score * 0.3) + (ml_score * 0.7))
     elif ml_score >= 40:
@@ -281,34 +209,14 @@ async def analyze_offer(file: UploadFile = File(...)):
     else:
         risk_level = "HIGH RISK"
 
-    return {
-        "filename": file.filename,
-        "fraud_score": fraud_score,
-        "risk_level": risk_level,
-        "payment_risk": financial_score,
-        "email_risk": email_score,
-        "language_risk": urgency_score,
-        "structure_risk": structure_score,
-        "ml_score": ml_score,
-        "reasons": reasons,
-        "top_ml_keywords": top_suspicious_words,
-    }
-    # ---------------------------------------------------
-# Text analysis endpoint
+    return fraud_score, risk_level
+
+
+# ---------------------------------------------------
+# Shared ML prediction function
 # ---------------------------------------------------
 
-@app.post("/analyze-text/")
-async def analyze_text(payload: dict = Body(...)):
-    text = payload.get("text", "").strip()
-
-    if not text:
-        return {"error": "No text provided"}
-
-    if len(text) < 50:
-        return {"error": "Text is too short to analyze"}
-
-    text_lower = text.lower()
-
+def run_ml(text, text_lower):
     text_vector = vectorizer.transform([text])
     ml_probability = ml_model.predict_proba(text_vector)[0][1]
     ml_score = int(ml_probability * 100)
@@ -323,54 +231,77 @@ async def analyze_text(payload: dict = Body(...)):
         weight = coefficients[idx]
         if weight > 0 and word in text_lower:
             top_suspicious_words.append(word)
-    top_suspicious_words = top_suspicious_words[:5]
 
-    urgency_score = 0
-    financial_score = 0
-    email_score = 0
-    structure_score = 0
-    reasons = []
+    return ml_score, top_suspicious_words[:5]
 
-    for word in ["immediately","urgent","within 24 hours","act fast","limited time"]:
-        if word in text_lower:
-            urgency_score += 10
-            reasons.append(f"Urgency pattern detected: {word}")
 
-    for word in ["processing fee","registration fee","non-refundable","payment required","bank transfer","upi"]:
-        if word in text_lower:
-            financial_score += 20
-            reasons.append(f"Financial red flag detected: {word}")
+# ---------------------------------------------------
+# PDF Analysis endpoint
+# ---------------------------------------------------
 
-    emails = set(re.findall(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+", text))
-    for email in emails:
-        domain = email.split("@")[1].lower()
-        if domain in ["gmail.com","yahoo.com","outlook.com","hotmail.com"]:
-            email_score += 30
-            reasons.append(f"Free email domain detected: {domain}")
-        if "-" in domain or any(char.isdigit() for char in domain):
-            email_score += 15
-            reasons.append(f"Suspicious domain pattern detected: {domain}")
+@app.post("/analyze/")
+async def analyze_offer(file: UploadFile = File(...)):
 
-    if "address" not in text_lower:
-        structure_score += 10
-        reasons.append("No company address found")
-    if "www." not in text_lower and ".com" not in text_lower:
-        structure_score += 10
-        reasons.append("No official website detected")
-    if not re.search(r"\+?\d{10,}", text):
-        structure_score += 10
-        reasons.append("No valid phone number detected")
+    content = await file.read()
 
-    rule_score = urgency_score + financial_score + email_score + structure_score
-    if ml_score >= 70:
-        combined_score = int((rule_score * 0.3) + (ml_score * 0.7))
-    elif ml_score >= 40:
-        combined_score = int((rule_score * 0.5) + (ml_score * 0.5))
-    else:
-        combined_score = int((rule_score * 0.6) + (ml_score * 0.4))
+    try:
+        pdf = fitz.open(stream=content, filetype="pdf")
+    except Exception:
+        return {"error": "Invalid or corrupted PDF file"}
 
-    fraud_score = min(combined_score, 100)
-    risk_level = "LOW RISK" if fraud_score <= 30 else "MEDIUM RISK" if fraud_score <= 60 else "HIGH RISK"
+    text = ""
+    for page in pdf:
+        text += page.get_text()
+    pdf.close()
+
+    # OCR fallback
+    if not text.strip():
+        images = convert_from_bytes(content)
+        for image in images:
+            text += pytesseract.image_to_string(image)
+
+    if not text.strip():
+        return {"error": "No readable text found in PDF"}
+
+    text_lower = text.lower()
+
+    ml_score, top_suspicious_words = run_ml(text, text_lower)
+    urgency_score, financial_score, email_score, structure_score, reasons = run_rule_engine(text, text_lower)
+    fraud_score, risk_level = calculate_final_score(ml_score, urgency_score, financial_score, email_score, structure_score)
+
+    return {
+        "filename": file.filename,
+        "fraud_score": fraud_score,
+        "risk_level": risk_level,
+        "payment_risk": financial_score,
+        "email_risk": email_score,
+        "language_risk": urgency_score,
+        "structure_risk": structure_score,
+        "ml_score": ml_score,
+        "reasons": reasons,
+        "top_ml_keywords": top_suspicious_words,
+    }
+
+
+# ---------------------------------------------------
+# Text Analysis endpoint
+# ---------------------------------------------------
+
+@app.post("/analyze-text/")
+async def analyze_text(payload: dict = Body(...)):
+    text = payload.get("text", "").strip()
+
+    if not text:
+        return {"error": "No text provided"}
+
+    if len(text) < 50:
+        return {"error": "Text is too short to analyze"}
+
+    text_lower = text.lower()
+
+    ml_score, top_suspicious_words = run_ml(text, text_lower)
+    urgency_score, financial_score, email_score, structure_score, reasons = run_rule_engine(text, text_lower)
+    fraud_score, risk_level = calculate_final_score(ml_score, urgency_score, financial_score, email_score, structure_score)
 
     return {
         "filename": "pasted-text",
@@ -392,5 +323,4 @@ async def analyze_text(payload: dict = Body(...)):
 
 if __name__ == "__main__":
     import uvicorn
-
     uvicorn.run(app, host="0.0.0.0", port=10000)
