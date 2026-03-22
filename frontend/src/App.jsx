@@ -240,7 +240,147 @@ const verd = (c) =>
     : c === "medium"
       ? "Suspicious signals detected — verify the company before proceeding."
       : "Low risk — this offer appears legitimate. Always verify independently.";
+const downloadReport = (result, riskClass) => {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  const pageW = doc.internal.pageSize.getWidth();
 
+  // Header
+  doc.setFillColor(5, 8, 15);
+  doc.rect(0, 0, pageW, 40, "F");
+  doc.setTextColor(0, 212, 255);
+  doc.setFontSize(22);
+  doc.setFont("helvetica", "bold");
+  doc.text("OfferGuard", 14, 18);
+  doc.setFontSize(10);
+  doc.setTextColor(100, 116, 139);
+  doc.text("AI Fraud Detection Report", 14, 27);
+  doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 34);
+
+  const riskColor =
+    riskClass === "high"
+      ? [255, 59, 92]
+      : riskClass === "medium"
+        ? [255, 184, 0]
+        : [0, 229, 160];
+
+  // Score box
+  doc.setFillColor(...riskColor);
+  doc.roundedRect(14, 48, 80, 30, 3, 3, "F");
+  doc.setTextColor(255, 255, 255);
+  doc.setFontSize(28);
+  doc.setFont("helvetica", "bold");
+  doc.text(`${result.fraud_score}/100`, 20, 68);
+
+  // Risk level box
+  doc.setFillColor(30, 41, 59);
+  doc.roundedRect(100, 48, 95, 30, 3, 3, "F");
+  doc.setTextColor(...riskColor);
+  doc.setFontSize(14);
+  doc.text(result.risk_level, 106, 60);
+  doc.setFontSize(9);
+  doc.setTextColor(100, 116, 139);
+  doc.text(`File: ${result.filename}`, 106, 70);
+
+  doc.setDrawColor(30, 45, 71);
+  doc.line(14, 86, pageW - 14, 86);
+
+  // Score breakdown
+  doc.setTextColor(0, 212, 255);
+  doc.setFontSize(11);
+  doc.setFont("helvetica", "bold");
+  doc.text("SCORE BREAKDOWN", 14, 96);
+
+  const breakdown = [
+    ["ML Score", `${result.ml_score}/100`],
+    [
+      "Rule Score",
+      `${result.payment_risk + result.email_risk + result.language_risk + result.structure_risk} pts`,
+    ],
+    ["Financial Risk", `${result.payment_risk} pts`],
+    ["Email Risk", `${result.email_risk} pts`],
+    ["Language Risk", `${result.language_risk} pts`],
+    ["Structure Risk", `${result.structure_risk} pts`],
+  ];
+
+  let y = 106;
+  breakdown.forEach(([label, val]) => {
+    doc.setFillColor(12, 17, 32);
+    doc.rect(14, y - 5, pageW - 28, 10, "F");
+    doc.setTextColor(203, 213, 225);
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "normal");
+    doc.text(label, 18, y + 2);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(...riskColor);
+    doc.text(val, pageW - 18, y + 2, { align: "right" });
+    y += 12;
+  });
+
+  y += 6;
+  doc.setDrawColor(30, 45, 71);
+  doc.line(14, y, pageW - 14, y);
+  y += 10;
+
+  // Fraud signals
+  if (result.reasons?.length > 0) {
+    doc.setTextColor(0, 212, 255);
+    doc.setFontSize(11);
+    doc.setFont("helvetica", "bold");
+    doc.text("FRAUD SIGNALS DETECTED", 14, y);
+    y += 10;
+    result.reasons.forEach((reason) => {
+      doc.setFillColor(12, 17, 32);
+      doc.rect(14, y - 5, pageW - 28, 10, "F");
+      doc.setTextColor(255, 143, 163);
+      doc.setFontSize(9);
+      doc.setFont("helvetica", "normal");
+      const lines = doc.splitTextToSize(`• ${reason}`, pageW - 36);
+      doc.text(lines, 18, y + 2);
+      y += lines.length * 10 + 2;
+      if (y > 270) {
+        doc.addPage();
+        y = 20;
+      }
+    });
+    y += 6;
+  }
+
+  // ML Keywords
+  if (result.top_ml_keywords?.length > 0) {
+    doc.setDrawColor(30, 45, 71);
+    doc.line(14, y, pageW - 14, y);
+    y += 10;
+    doc.setTextColor(0, 212, 255);
+    doc.setFontSize(11);
+    doc.setFont("helvetica", "bold");
+    doc.text("ML SUSPICIOUS KEYWORDS", 14, y);
+    y += 10;
+    doc.setTextColor(203, 213, 225);
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "normal");
+    doc.text(result.top_ml_keywords.join("   •   "), 14, y);
+    y += 16;
+  }
+
+  // Footer
+  doc.setDrawColor(30, 45, 71);
+  doc.line(14, y, pageW - 14, y);
+  y += 8;
+  doc.setTextColor(71, 85, 105);
+  doc.setFontSize(8);
+  doc.text("OfferGuard · AI Fraud Detection Platform", pageW / 2, y, {
+    align: "center",
+  });
+  doc.text(
+    "Always verify offer letters independently before accepting.",
+    pageW / 2,
+    y + 6,
+    { align: "center" },
+  );
+
+  doc.save(`OfferGuard_Report_${result.filename}.pdf`);
+};
 // ── Confidence level based on number of signals found ──
 const confidence = (signals) => {
   if (signals >= 5)
@@ -721,42 +861,109 @@ export default function App() {
               )}
             </div>
 
-            <button className="reset-btn" onClick={reset}>
-              ← Analyze Another Document
-            </button>
+            <div style={{ display: "flex", gap: "12px", marginTop: "20px" }}>
+              <button
+                className="reset-btn"
+                style={{ margin: 0 }}
+                onClick={reset}
+              >
+                ← Analyze Another Document
+              </button>
+              <button
+                onClick={() => downloadReport(result, riskClass)}
+                style={{
+                  padding: "15px 24px",
+                  fontFamily: "var(--sans)",
+                  fontSize: "14px",
+                  fontWeight: "600",
+                  background: "var(--cyan)",
+                  color: "#000",
+                  border: "none",
+                  borderRadius: "14px",
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                  transition: "all 0.2s",
+                }}
+              >
+                ↓ Download Report
+              </button>
+            </div>
           </div>
         )}
         {/* SCAN HISTORY */}
-{history.length > 0 && !result && (
-  <div className="icard" style={{marginBottom:"32px"}}>
-    <div className="icard-title">
-      <div className="icard-dot"/>
-      Recent Scans
-      <span
-        onClick={()=>{ setHistory([]); localStorage.removeItem("og_history"); }}
-        style={{marginLeft:"auto",fontSize:"10px",color:"var(--muted)",cursor:"pointer",fontWeight:"400"}}
-      >
-        Clear
-      </span>
-    </div>
-    {history.map((h)=>(
-      <div key={h.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 0",borderBottom:"1px solid var(--border)"}}>
-        <div>
-          <div style={{fontSize:"13px",color:"var(--text)",fontFamily:"var(--mono)"}}>{h.filename}</div>
-          <div style={{fontSize:"11px",color:"var(--muted)",marginTop:"3px"}}>{h.time}</div>
-        </div>
-        <div style={{
-          fontFamily:"var(--mono)", fontSize:"11px", fontWeight:"700",
-          color: h.score>=61?"var(--red)":h.score>=31?"var(--amber)":"var(--green)",
-          textAlign:"right"
-        }}>
-          <div>{h.score}/100</div>
-          <div style={{fontSize:"10px",opacity:0.7}}>{h.risk}</div>
-        </div>
-      </div>
-    ))}
-  </div>
-)}
+        {history.length > 0 && !result && (
+          <div className="icard" style={{ marginBottom: "32px" }}>
+            <div className="icard-title">
+              <div className="icard-dot" />
+              Recent Scans
+              <span
+                onClick={() => {
+                  setHistory([]);
+                  localStorage.removeItem("og_history");
+                }}
+                style={{
+                  marginLeft: "auto",
+                  fontSize: "10px",
+                  color: "var(--muted)",
+                  cursor: "pointer",
+                  fontWeight: "400",
+                }}
+              >
+                Clear
+              </span>
+            </div>
+            {history.map((h) => (
+              <div
+                key={h.id}
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  padding: "10px 0",
+                  borderBottom: "1px solid var(--border)",
+                }}
+              >
+                <div>
+                  <div
+                    style={{
+                      fontSize: "13px",
+                      color: "var(--text)",
+                      fontFamily: "var(--mono)",
+                    }}
+                  >
+                    {h.filename}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: "11px",
+                      color: "var(--muted)",
+                      marginTop: "3px",
+                    }}
+                  >
+                    {h.time}
+                  </div>
+                </div>
+                <div
+                  style={{
+                    fontFamily: "var(--mono)",
+                    fontSize: "11px",
+                    fontWeight: "700",
+                    color:
+                      h.score >= 61
+                        ? "var(--red)"
+                        : h.score >= 31
+                          ? "var(--amber)"
+                          : "var(--green)",
+                    textAlign: "right",
+                  }}
+                >
+                  <div>{h.score}/100</div>
+                  <div style={{ fontSize: "10px", opacity: 0.7 }}>{h.risk}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
 
         <div className="footer">
           <div className="footer-line" />
